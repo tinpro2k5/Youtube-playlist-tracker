@@ -1,6 +1,26 @@
 {
   "name": "youtube-playlist-tracker",
   "version": "1.0.0",
+  "description": "A quick way to gather all the metadata about a video, playlist, or channel from the YouTube API.",
+  "main": "index.js",
   "type": "module",
-  "dependencies": {}
+  "scripts": {
+    "start": "node src/index.js",
+    "youtube:auth": "node scripts/getYoutubeTokens.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tinpro2k5/Youtube-playlist-tracker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/tinpro2k5/Youtube-playlist-tracker/issues"
+  },
+  "homepage": "https://github.com/tinpro2k5/Youtube-playlist-tracker#readme",
+  "dependencies": {
+    "dotenv": "^17.2.4"
+  }
 }

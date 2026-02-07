@@ -138,4 +138,4 @@ const shared = (function () {
             return list[Math.floor(Math.random() * list.length)];
         }
     }
-})();
+}) ();

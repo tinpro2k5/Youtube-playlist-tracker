@@ -1,3 +1,5 @@
 .idea/
 _site/
-gemfile.lock
+node_modules
+.env
+secret/

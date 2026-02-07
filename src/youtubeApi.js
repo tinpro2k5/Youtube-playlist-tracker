@@ -1,79 +1,112 @@
 /**
- * YouTube API v3
- * Reference documentation:
- * https://developers.google.com/youtube/v3/docs/
- *
- * youtube.ajax("videos", {
- *     part: 'snippet'
- * }).done(function (res) {
- *
- * }).fail(function (err) {
- *
- * });
- *
- * @requires jquery
- * @author mattwright324
+ * Lightweight YouTube Data API v3 wrapper for Node.js
+ * - No jQuery / browser APIs
+ * - Uses fetch + async/await
+ * - Convenience helpers for playlistItems, videos, playlists
  */
-const youtube = (function ($) {
-    'use strict';
+import crypto from 'crypto';
 
-    function makeStr(length) {
-        let result = '';
-        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        const charactersLength = characters.length;
-        let counter = 0;
-        while (counter < length) {
-            result += characters.charAt(Math.floor(Math.random() * charactersLength));
-            counter += 1;
+const DEFAULT_BASE_URL = 'https://www.googleapis.com/youtube/v3/';
+const DEFAULT_TIMEOUT_MS = 5000;
+
+// Generate a random string for quotaUser if not set via env or explicitly. This helps distribute quota usage across multiple instances.
+const randomId = (length = 40) => crypto.randomBytes(Math.ceil(length / 2)).toString('hex').slice(0, length);
+
+let baseUrl = DEFAULT_BASE_URL;
+let apiKey = process.env.YT_API_KEY || process.env.YOUTUBE_API_KEY || '';
+let quotaUser = process.env.YT_QUOTA_USER || randomId();
+
+const normalizeBaseUrl = (url) => (url.endsWith('/') ? url : `${url}/`);
+
+const buildUrl = (endpoint, params) => {
+    const url = new URL(endpoint, baseUrl);
+    Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+            url.searchParams.set(key, value);
         }
-        return result;
+    });
+    return url.toString();
+};
+
+const safeParseJson = async (response) => {
+    try {
+        const clone = response.clone();
+        return await clone.json();
+    } catch (_) {
+        return null;
+    }
+};
+
+async function request(endpoint, params = {}, { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
+    const key = params.key || apiKey;
+    if (!key) {
+        throw new Error('YouTube API key missing. Set it via setKey() or env YT_API_KEY.');
     }
 
-    const tempId = localStorage.getItem("tempId") || makeStr(40);
-    localStorage.setItem("tempId", tempId);
+    const url = buildUrl(endpoint, { key, quotaUser, ...params });
 
-    let baseUrl = "https://www.googleapis.com/youtube/v3/"
-    let defaultKey = "";
-    let currentKey = "";
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const effectiveSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
 
-    return {
-        setBaseUrl: function (url) {
-            baseUrl = url;
-        },
-        getBaseUrl: function () {
-            return baseUrl;
-        },
-        setDefaultKey: function (key) {
-            defaultKey = key;
-            this.setKey(key);
-        },
-        getDefaultKey: function () {
-            return defaultKey;
-        },
-        setKey: function (key) {
-            if (defaultKey === "") {
-                this.setDefaultKey(key);
-            }
-            currentKey = key;
-        },
-        getKey: function () {
-            return currentKey;
-        },
-        ajax: function (type, data) {
-            if (!defaultKey && defaultKey === "" && !currentKey && currentKey === "") {
-                console.error("YouTube API Key Missing");
-            } else {
-                return $.ajax({
-                    cache: false,
-                    data: $.extend({key: currentKey, quotaUser: tempId}, data),
-                    dataType: "json",
-                    type: "GET",
-                    timeout: 5000,
-                    url: baseUrl + type
-                });
-            }
+    try {
+        const response = await fetch(url, { method: 'GET', signal: effectiveSignal });
+        const payload = await safeParseJson(response);
+
+        if (!response.ok) {
+            const message = payload?.error?.message || response.statusText || 'Unknown error';
+            const code = payload?.error?.code || response.status;
+            throw new Error(`YouTube API error (${code}): ${message}`);
         }
-    };
-}($));
-youtube.setBaseUrl("https://ytapi.apps.mattw.io/v3/")
-youtube.setDefaultKey("foo1");
+
+        if (!payload) {
+            throw new Error('YouTube API returned an empty response body.');
+        }
+
+        return payload;
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            throw new Error(`YouTube API request timed out after ${timeoutMs}ms.`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+const setBaseUrl = (url) => {
+    baseUrl = normalizeBaseUrl(url);
+};
+
+const getBaseUrl = () => baseUrl;
+
+const setKey = (key) => {
+    apiKey = key;
+};
+
+const getKey = () => apiKey;
+
+const setQuotaUser = (id) => {
+    quotaUser = id;
+};
+
+const getQuotaUser = () => quotaUser;
+
+const playlistItems = (params) => request('playlistItems', params);
+const videos = (params) => request('videos', params);
+const playlists = (params) => request('playlists', params);
+
+export const youtube = {
+    setBaseUrl,
+    getBaseUrl,
+    setKey,
+    getKey,
+    setQuotaUser,
+    getQuotaUser,
+    request,
+    playlistItems,
+    videos,
+    playlists
+};
+
+export default youtube;
