@@ -8,13 +8,12 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import fetch from 'node-fetch';
 import readline from 'node:readline/promises';
-import {stdin as input, stdout as output} from 'node:process';
+import { stdin as input, stdout as output } from 'node:process';
 import dotenv from 'dotenv';
 
-const ENV_PATH = path.resolve('config/.env');
-dotenv.config({path: ENV_PATH});
+const ENV_PATH = path.resolve('.env');
+dotenv.config({ path: ENV_PATH });
 
 const DEFAULT_SCOPES = ['https://www.googleapis.com/auth/youtube.readonly'];
 const SECRET_FILE = path.resolve('config/secret/client_secret_130090101339-vhmssnkphv2nm7ja212m91qscc41ckn2.apps.googleusercontent.com.json');
@@ -68,7 +67,7 @@ const exchangeCodeForTokens = async (code) => {
 
     const res = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body
     });
 
@@ -96,7 +95,7 @@ const main = async () => {
     console.log(authUrl);
     console.log('\n2) After consenting, copy the "code" parameter from the redirect URL and paste below.\n');
 
-    const rl = readline.createInterface({input, output});
+    const rl = readline.createInterface({ input, output });
     const code = (await rl.question('Enter the authorization code: ')).trim();
     rl.close();
 

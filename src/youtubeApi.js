@@ -1,7 +1,7 @@
 /**
  * Lightweight YouTube Data API v3 wrapper for Node.js
- * - No jQuery / browser APIs
  * - Uses fetch + async/await
+ * - OAuth bearer token auth
  * - Convenience helpers for playlistItems, videos, playlists
  */
 import crypto from 'crypto';
@@ -9,11 +9,11 @@ import crypto from 'crypto';
 const DEFAULT_BASE_URL = 'https://www.googleapis.com/youtube/v3/';
 const DEFAULT_TIMEOUT_MS = 5000;
 
-// Generate a random string for quotaUser if not set via env or explicitly. This helps distribute quota usage across multiple instances.
+// Generate a random string for quotaUser if not set via env or explicitly.
 const randomId = (length = 40) => crypto.randomBytes(Math.ceil(length / 2)).toString('hex').slice(0, length);
 
 let baseUrl = DEFAULT_BASE_URL;
-let apiKey = process.env.YT_API_KEY || process.env.YOUTUBE_API_KEY || '';
+let accessToken = '';
 let quotaUser = process.env.YT_QUOTA_USER || randomId();
 
 const normalizeBaseUrl = (url) => (url.endsWith('/') ? url : `${url}/`);
@@ -37,20 +37,27 @@ const safeParseJson = async (response) => {
     }
 };
 
-async function request(endpoint, params = {}, { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
-    const key = params.key || apiKey;
-    if (!key) {
-        throw new Error('YouTube API key missing. Set it via setKey() or env YT_API_KEY.');
+async function request(endpoint, params = {}, { timeoutMs = DEFAULT_TIMEOUT_MS, signal, accessToken: tokenOverride } = {}) {
+    const token = tokenOverride || accessToken;
+    if (!token) {
+        throw new Error('YouTube access token missing. Set it via setAccessToken() or pass accessToken in request options.');
     }
 
-    const url = buildUrl(endpoint, { key, quotaUser, ...params });
+    const { accessToken: _ignored, ...queryParams } = params;
+    const url = buildUrl(endpoint, { quotaUser, ...queryParams });
 
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
     const effectiveSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
 
     try {
-        const response = await fetch(url, { method: 'GET', signal: effectiveSignal });
+        const response = await fetch(url, {
+            method: 'GET',
+            signal: effectiveSignal,
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        });
         const payload = await safeParseJson(response);
 
         if (!response.ok) {
@@ -80,11 +87,11 @@ const setBaseUrl = (url) => {
 
 const getBaseUrl = () => baseUrl;
 
-const setKey = (key) => {
-    apiKey = key;
+const setAccessToken = (token) => {
+    accessToken = token;
 };
 
-const getKey = () => apiKey;
+const getAccessToken = () => accessToken;
 
 const setQuotaUser = (id) => {
     quotaUser = id;
@@ -99,8 +106,8 @@ const playlists = (params) => request('playlists', params);
 export const youtube = {
     setBaseUrl,
     getBaseUrl,
-    setKey,
-    getKey,
+    setAccessToken,
+    getAccessToken,
     setQuotaUser,
     getQuotaUser,
     request,
