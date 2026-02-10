@@ -4,6 +4,8 @@ import { downloadThumbnail } from './thumbnailDownloader.js';
 import { logger } from './logger.js';
 
 const MAX_RESULTS = 50;
+const REMOVED_TTL_DAYS = 12;
+const REMOVED_TTL_MS = REMOVED_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 const getVideoIdFromItem = (item) => {
 	return item?.snippet?.resourceId?.videoId || item?.contentDetails?.videoId || '';
@@ -41,18 +43,36 @@ const fetchPlaylistItems = async (playlistId) => {
 };
 
 const fetchVideoDetails = async (videoIds) => {
-	const map = {};
+	if (videoIds.length === 0) return {};
+
+	// Split into batches
+	const batches = [];
 	for (let i = 0; i < videoIds.length; i += MAX_RESULTS) {
-		const batch = videoIds.slice(i, i + MAX_RESULTS);
-		if (batch.length === 0) continue;
-		const res = await youtube.videos({
-			part: 'snippet,contentDetails,status',
-			id: batch.join(',')
-		});
+		batches.push(videoIds.slice(i, i + MAX_RESULTS));
+	}
+
+	// Fetch batches in parallel with concurrency limit
+	const BATCH_CONCURRENCY = parseInt(process.env.BATCH_CONCURRENCY) || 3;
+	const allResults = [];
+
+	for (let i = 0; i < batches.length; i += BATCH_CONCURRENCY) {
+		const batchGroup = batches.slice(i, i + BATCH_CONCURRENCY);
+		const results = await Promise.all(batchGroup.map(batch =>
+			youtube.videos({
+				part: 'snippet,contentDetails,status',
+				id: batch.join(',')
+			})
+		));
+		allResults.push(...results);
+	}
+
+	// Merge all results into map
+	const map = {};
+	allResults.forEach(res => {
 		(res.items || []).forEach((item) => {
 			map[item.id] = item;
 		});
-	}
+	});
 	return map;
 };
 
@@ -83,6 +103,28 @@ const buildStats = (videos, removedVideos) => {
 	return stats;
 };
 
+const pruneRemovedVideos = (removed, { ttlMs, maxSize } = {}) => {
+	const cutoff = Date.now() - (ttlMs ?? REMOVED_TTL_MS);
+
+	const entries = Object.entries(removed).filter(([, value]) => {
+		const dateValue = value?.removedAt || value?.lastSeenAt || '';
+		const timestamp = Date.parse(dateValue);
+		if (!Number.isFinite(timestamp)) {
+			return true;
+		}
+		return timestamp >= cutoff;
+	});
+
+	entries.sort((a, b) => {
+		const aTime = Date.parse(a[1]?.removedAt || a[1]?.lastSeenAt || '') || 0;
+		const bTime = Date.parse(b[1]?.removedAt || b[1]?.lastSeenAt || '') || 0;
+		return bTime - aTime;
+	});
+
+	const limited = Number.isFinite(maxSize) ? entries.slice(0, maxSize) : entries;
+	return Object.fromEntries(limited);
+};
+
 export const trackPlaylist = async ({ id, name }) => {
 	const now = new Date().toISOString();
 	const oldSnapshot = loadSnapshot(id) || { videos: {}, removedVideos: {} };
@@ -95,35 +137,66 @@ export const trackPlaylist = async ({ id, name }) => {
 
 	const playlistTitle = name || oldSnapshot.playlistTitle || (await fetchPlaylistTitle(id));
 
-	const videos = {};
-	for (const item of items) {
-		const videoId = getVideoIdFromItem(item);
-		if (!videoId) continue;
+	// Prepare video processing tasks
+	const videoTasks = items.map(item => ({
+		item,
+		videoId: getVideoIdFromItem(item),
+		oldVideo: oldVideos[getVideoIdFromItem(item)]
+	})).filter(task => task.videoId);
 
+	// Download all thumbnails in parallel (with concurrency limit)
+	const THUMBNAIL_CONCURRENCY = parseInt(process.env.THUMBNAIL_CONCURRENCY) || 10;
+	const thumbnailResults = new Map();
+
+	const thumbnailTasks = videoTasks
+		.filter(({ videoId, oldVideo }) => {
+			const detail = videoMap[videoId];
+			return detail; // Only download for videos with details
+		})
+		.map(async ({ videoId, oldVideo }) => {
+			const detail = videoMap[videoId];
+			const thumbnails = detail.snippet?.thumbnails || {};
+			const existingPath = oldVideo?.assets?.thumbnailPath || '';
+
+			try {
+				const path = await downloadThumbnail(videoId, thumbnails, existingPath);
+				return { videoId, path };
+			} catch (err) {
+				logger.warn(`Thumbnail download failed for ${videoId}`, err.message);
+				return { videoId, path: existingPath };
+			}
+		});
+
+	// Process thumbnails in batches to avoid overwhelming B2
+	for (let i = 0; i < thumbnailTasks.length; i += THUMBNAIL_CONCURRENCY) {
+		const batch = thumbnailTasks.slice(i, i + THUMBNAIL_CONCURRENCY);
+		const results = await Promise.all(batch);
+		results.forEach(({ videoId, path }) => {
+			thumbnailResults.set(videoId, path);
+		});
+	}
+
+	// Build videos object with all data
+	const videos = {};
+	for (const { item, videoId, oldVideo } of videoTasks) {
 		if (removedVideos[videoId]) {
 			delete removedVideos[videoId];
 		}
 
 		const detail = videoMap[videoId];
-		const oldVideo = oldVideos[videoId];
 
 		if (detail) {
-			const thumbnails = detail.snippet?.thumbnails || {};
-			let thumbnailPath = oldVideo?.assets?.thumbnailPath || '';
-			if (!thumbnailPath) {
-				try {
-					thumbnailPath = await downloadThumbnail(videoId, thumbnails);
-				} catch (err) {
-					logger.warn(`Thumbnail download failed for ${videoId}`, err.message);
-				}
-			}
+			const thumbnailUrl = detail.snippet?.thumbnails?.high?.url ||
+				detail.snippet?.thumbnails?.medium?.url ||
+				detail.snippet?.thumbnails?.default?.url || '';
+			const thumbnailPath = thumbnailResults.get(videoId) || '';
 
 			videos[videoId] = {
 				title: detail.snippet?.title || oldVideo?.title || '',
 				channelId: detail.snippet?.channelId || oldVideo?.channelId || '',
 				channelTitle: detail.snippet?.channelTitle || oldVideo?.channelTitle || '',
 				publishedAt: detail.snippet?.publishedAt || oldVideo?.publishedAt || null,
-				thumbnails,
+				thumbnailUrl,
 				status: 'ok',
 				firstSeenAt: oldVideo?.firstSeenAt || now,
 				lastSeenAt: now,
@@ -146,7 +219,7 @@ export const trackPlaylist = async ({ id, name }) => {
 			channelId: oldVideo?.channelId || '',
 			channelTitle: oldVideo?.channelTitle || '',
 			publishedAt: oldVideo?.publishedAt || null,
-			thumbnails: oldVideo?.thumbnails || {},
+			thumbnailUrl: oldVideo?.thumbnailUrl || '',
 			status: missingStatus,
 			firstSeenAt: oldVideo?.firstSeenAt || now,
 			lastSeenAt: oldVideo?.lastSeenAt || now,
@@ -163,6 +236,7 @@ export const trackPlaylist = async ({ id, name }) => {
 			}
 		};
 	}
+
 
 	for (const [videoId, oldVideo] of Object.entries(oldVideos)) {
 		if (currentIds.includes(videoId)) continue;
@@ -192,15 +266,16 @@ export const trackPlaylist = async ({ id, name }) => {
 		};
 	}
 
+	const prunedRemovedVideos = pruneRemovedVideos(removedVideos);
 	const snapshot = {
 		playlistId: id,
 		playlistTitle,
 		lastFetchedAt: now,
 		videos,
-		removedVideos
+		removedVideos: prunedRemovedVideos
 	};
 
-	snapshot.stats = buildStats(videos, removedVideos);
+	snapshot.stats = buildStats(videos, prunedRemovedVideos);
 
 	saveSnapshot(id, snapshot);
 	return snapshot;

@@ -4,6 +4,9 @@
   "description": "A quick way to gather all the metadata about a video, playlist, or channel from the YouTube API.",
   "main": "index.js",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node src/index.js",
     "youtube:auth": "node scripts/getYoutubeTokens.js",

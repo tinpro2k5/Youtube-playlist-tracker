@@ -1,34 +1,26 @@
-import fs from 'node:fs';
-import path from 'node:path';
+const MAX_RESULTS = 50;
 
-const CONFIG_PATH = path.resolve(process.cwd(), 'config', 'playlists.json');
+export const fetchUserPlaylists = async (youtube) => {
+    let items = [];
+    let pageToken = '';
 
-const readJsonFile = (filePath) => {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(raw);
+    do {
+        const res = await youtube.playlists({
+            part: 'snippet,contentDetails',
+            maxResults: MAX_RESULTS,
+            mine: true,
+            pageToken
+        });
+        items = items.concat(res.items || []);
+        pageToken = res.nextPageToken || '';
+    } while (pageToken);
+
+    return items.map((item) => ({
+        id: item.id,
+        name: item.snippet?.title || ''
+    }));
 };
 
-export const loadConfig = () => {
-    if (!fs.existsSync(CONFIG_PATH)) {
-        throw new Error(`Missing config file: ${CONFIG_PATH}`);
-    }
-
-    const config = readJsonFile(CONFIG_PATH);
-    const playlists = Array.isArray(config.playlists) ? config.playlists : [];
-
-    if (playlists.length === 0) {
-        throw new Error('Config playlists is empty. Add playlist ids to config/playlists.json.');
-    }
-
-    const normalized = playlists.map((item) => {
-        if (!item || !item.id) {
-            throw new Error('Each playlist entry must include an id.');
-        }
-        return {
-            id: String(item.id).trim(),
-            name: item.name ? String(item.name).trim() : ''
-        };
-    });
-
-    return { playlists: normalized };
+export default {
+    fetchUserPlaylists
 };

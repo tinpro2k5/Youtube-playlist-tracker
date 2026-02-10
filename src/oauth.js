@@ -51,12 +51,6 @@ export const getAccessToken = async () => {
     return exchangeRefreshToken({ clientId, clientSecret, refreshToken });
 };
 
-export const loadAccessTokenFromFile = (filePath) => {
-    if (!filePath || !fs.existsSync(filePath)) {
-        return '';
-    }
-    const raw = fs.readFileSync(filePath, 'utf8');
-    return raw.trim();
-};
+
 
 export const resolveRootPath = (...parts) => path.resolve(process.cwd(), ...parts);

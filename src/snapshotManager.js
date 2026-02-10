@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { logger } from './logger.js';
 
 const SNAPSHOT_DIR = path.resolve(process.cwd(), 'data', 'snapshots');
 
@@ -16,8 +17,14 @@ export const loadSnapshot = (playlistId) => {
 	if (!fs.existsSync(filePath)) {
 		return null;
 	}
-	const raw = fs.readFileSync(filePath, 'utf8');
-	return JSON.parse(raw);
+
+	try {
+		const raw = fs.readFileSync(filePath, 'utf8');
+		return JSON.parse(raw);
+	} catch (err) {
+		logger.error(`Failed to load snapshot for ${playlistId}`, err.message);
+		return null;
+	}
 };
 
 export const saveSnapshot = (playlistId, snapshot) => {
